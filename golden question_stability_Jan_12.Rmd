@@ -1,0 +1,1236 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-08-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r}
+
+
+# NOTE: YOU MUST UNLOCK DATASET IN CRUNCH TO MAKE CHANGES
+
+library(crunch)
+library(here)
+library(stringr)
+library(dplyr)
+library(tidyverse)
+#install.packages("numerator")
+#library(numerator)
+library(nnet)
+library(tidyverse)
+library(purrr)
+library(srvyr)
+library(ggplot2)
+library(DT)
+library(lubridate)
+
+# if needed for numerator package
+ install.packages("remotes")
+# remotes::install_github("cchoe/numerator")
+
+# first time set up
+ if (!require(" #usethis")) install.packages("usethis")
+ usethis::edit_r_environ()
+ R_CRUNCH_API="https://moreincommon.crunch.io/api/"
+ R_CRUNCH_API_KEY="apk-SGjaXP9zHeIkEjB_dLQ7Mpj4ZY3rGEQqXuye57M-Ogk="
+ 
+ 
+ ## list all datasets in the UK project, remove NNR datasets and keep only those with dates in XX to XX and pastes them together, and only keeps those with dates 
+ 
+ ds_name <- listDatasets(kind="all", project="UK", refresh=TRUE)
+ds_name <- ds_name[-grep("NNR", ds_name)]
+keep_dates <- paste(paste("25-", c("04", "05", "06", "07", "08", "09", "10"), sep=""), collapse="|") 
+ds_name <- ds_name[grep(keep_dates, ds_name)]
+
+
+
+
+
+## make the data frame using variables names old names new names
+renames <- data.frame(
+  old_names = c(
+    "agency_1", "agency_2", "agency_3", 
+    "MIC28", "MIC29", "MIC30", 
+    "parenting_1", "parenting_2", "parenting_3", "parenting_4",
+    "MIC31", "MIC32", "MIC33", "MIC34",
+    "selfefficacy_2", 
+    "authority_grid_1",
+    "authority_grid_2",
+    "authority_grid_3",
+    "authority_grid_4",
+    "care_grid_1",
+    "chaos_1", "conspiracy_grid_2", "engagement_6",
+    "freespech_1", "freespeech_2", "nativism_1", "nativism_2", "nativism_5", 
+    "immigration", "victimhood_immig", 
+    "lrgrid_1", "lrgrid_2", "lrgrid_3", "lrgrid_4", "lrgrid_5", 
+    "lr_grid_1", "lr_grid_2", "lr_grid_3", "lr_grid_4", "lr_grid_5", 
+    "autonomy_grid_3", "autonomy_grid_5", "autonomy_grid_6",
+    "care_1", "purity_2", "authority_2", "fairness_1"
+  ),
+  new_name = c(
+    "agency_1", "agency_2", "agency_3", 
+    "agency_1", "agency_2", "agency_3", 
+    "parenting_1", "parenting_2", "parenting_3", "parenting_4",
+    "parenting_1", "parenting_2", "parenting_3", "parenting_4",
+    "selfefficacy", 
+        "authority_grid_1",
+    "authority_grid_2",
+    "authority_grid_3",
+    "authority_grid_4",
+    "care_grid", "chaos", "conspiracy_grid", "engagement",
+    "freespech_1", "freespeech_2", "nativism_1", "nativism_2", "nativism_5", 
+    "immigration", "victimhood_immigration", 
+    "lr_grid_1", "lr_grid_2", "lr_grid_3", "lr_grid_4", "lr_grid_5", 
+    "lr_grid_1", "lr_grid_2", "lr_grid_3", "lr_grid_4", "lr_grid_5", 
+    "autonomy_grid_3", "autonomy_grid_5", "autonomy_grid_6",
+    "care", "purity", "authority", "fairness"
+  ),
+  stringsAsFactors = FALSE
+)
+
+
+
+
+##  loop will load all the datasets it can and  tell which datasets failed to load -only keeping datasets which has one of the golden questions - k +1 only increments when a dataset is successfully loaded
+
+ds <- list()
+k <- 1
+for(i in seq_along(ds_name)){
+  tmp <- try(loadDataset(ds_name[i], project="UK", refresh=TRUE))
+  if(inherits(tmp, "try-error")){
+    message(paste0(ds_name[i], " failed to load.\n"))  ## tells which data set failed to load
+  }else{
+    test_names <- renames$old_names
+    if(any(test_names %in% as.data.frame(variables(tmp))$name)){
+      ds[[k]] <- tmp
+      names(ds)[k] <- ds_name[i]
+      k <- k+1
+    }
+  }
+}
+
+
+saveRDS(ds, here("output", "ds_list.rds"))
+
+ds_list <- readRDS(here("output", "ds_list.rds"))
+
+
+
+ ## take times and dates out survey making data into object getting earliest and last date of survey
+ 
+ for(i in seq_along(ds_list)){
+  unlock(ds_list[[i]])
+  names <- data.frame(names = names(ds_list[[i]]))
+  dates <- as.data.frame(as.vector(ds_list[[i]]$START_DATE))[,1]
+  dates <- as.Date(substr(dates, 1, 10))
+  start <- min(dates)
+  end <- max(dates)
+  
+  startDate(ds_list[[i]]) <- start
+  endDate(ds_list[[i]]) <- end
+}
+
+ 
+ ## downloading all the data - this part will take 15-20 mins as it is downloading all the relevant datasets
+ 
+ df <- list()
+ for(i in seq_along(ds_list)){
+# for(i in 1:6) {
+  df[[i]] <- as.data.frame(ds_list[[i]], force=TRUE)
+}
+
+ 
+
+ ## remove duplicates when they exist
+ for(i in 1:length(df)){
+   if(all(c("lrgrid_1", "lr_grid_1") %in% names(df[[i]]))){
+     df[[i]] <- df[[i]] %>% select(-lr_grid_1)
+   }
+   if(all(c("lrgrid_2", "lr_grid_2") %in% names(df[[i]]))){
+     df[[i]] <- df[[i]] %>% select(-lr_grid_2)
+   }
+   if(all(c("lrgrid_3", "lr_grid_3") %in% names(df[[i]]))){
+     df[[i]] <- df[[i]] %>% select(-lr_grid_3)
+   }
+   if(all(c("lrgrid_4", "lr_grid_4") %in% names(df[[i]]))){
+     df[[i]] <- df[[i]] %>% select(-lr_grid_4)
+   }
+   if(all(c("lrgrid_5", "lr_grid_5") %in% names(df[[i]]))){
+     df[[i]] <- df[[i]] %>% select(-lr_grid_5)
+   }
+ }
+ 
+ 
+ 
+ saveRDS(df, here("output", "df_list.rds"))
+
+  df <- readRDS(here("output","df_list.rds"))
+
+
+ old_names <- renames$old_names
+ names(old_names) <- renames$new_name
+
+newdf <- lapply(df, \(d){
+ tmp <- old_names[which(old_names %in% names(d))]
+  d %>% rename(!!!tmp)
+ })
+
+
+## names of the golden questions
+gq <- unique(renames$new_name)
+
+names(df) <- names(newdf)<-names(ds_list)
+#[1:6]
+
+
+
+## With weights and survey design - sets list to gq names - loop over datasets and questions 
+## finds weight variables as long it one of these
+## if no weight variable skip it - if weight variable get serve weighted tally of each response category
+
+
+
+qres <- vector(mode = "list", length = length(gq))
+names(qres) <- gq
+
+for (ques in gq) {
+  for (i in seq_along(newdf)) {
+    if (ques %in% names(newdf[[i]])) {
+      # Find weight variable if present
+      weight_vars <- c("UKNatRepWeight", "GBnatrep", "uknatrep", "weightGB", 
+                       "uknatrepweight", "GBNatRepWeight")
+      wtvar <- weight_vars[weight_vars %in% names(newdf[[i]])][1]
+      if (is.na(wtvar)) wtvar <- NULL
+      
+      if (is.null(wtvar)) {
+        message(paste("No weight variable in dataset ", i, ": ", 
+                      names(newdf)[i], " skipping dataset.\n", sep=""))
+      } else {
+        qres[[ques]] <- bind_rows(
+          qres[[ques]],
+          newdf[[i]] %>%
+            as_survey_design(weights = !!sym(wtvar)) %>%
+            group_by(!!sym(ques)) %>%
+            survey_tally() %>%
+            select(-3) %>%
+            mutate(
+              dataset = names(newdf)[i],
+              # Extract date from dataset name, convert to Date
+              date = dmy(paste0(str_extract(names(newdf)[i], "^\\d{2}-\\d{2}"), "-2025")),
+              weight = wtvar,
+              question = ques
+            )
+        )
+      }
+    }
+  }
+}
+
+
+
+saveRDS(qres, here("output", "qres.rds"))
+
+qres <- readRDS(here("output", "qres.rds"))
+
+## check why skipping Israel-Palestine
+
+## remove null elements - places where the question was never asked
+qres <- qres[-which(sapply(qres, is.null))]
+## renaming the question to response, so it is "response" in all the datasets
+qres <- lapply(qres, \(x)setNames(x, c("response", "n", "dataset", "date", "weight", "question")))
+## make percentages within each dataset-date combination
+qres <- lapply(qres, \(x)x %>% group_by(dataset, date) %>% mutate(pct = n/sum(n)))
+## create new dataset that is one row per dataset-question with the response
+## categories, sizes and percentages nested in a data frame column
+question_table <- qres %>% bind_rows() %>% 
+  nest(df = c(response, n, pct))
+## find the actual dates of the survey and make a dataset with dataset name and start date
+##survey_dates <- as.Date(sapply(ds_list, \(x) as.character(attr(x, "body")$start_date)))
+##survey_dates <- tibble(dataset = names(survey_dates), date = survey_dates)
+
+
+survey_dates <- sapply(ds_list, function(x) as.character(attr(x, "body")$start_date))
+survey_dates <- substr(survey_dates, 1, 10)               
+survey_dates <- as.Date(survey_dates) 
+
+## merge question table and survey start dates
+ ## question_table <- question_table %>% ungroup %>%  select(-date) %>% left_join(survey_dates)
+
+survey_dates_df <- tibble(
+  dataset = names(survey_dates),
+  date = as.Date(survey_dates)
+)
+
+save
+
+## capture all the questions in the question_table dataset
+nms <- unique(question_table$question)
+
+
+titles <- c("agency_1" = "Are life outcomes under your control",
+           "agency_2" = "Hard work and effort will allow all people to have success", 
+            "agency_3" = "Which is more important for success - hard work or luck",
+             "authority_grid_1" = "Most traditions serve a valuable function", 
+              "authority_grid_2" = "Important to teach children to value authority", 
+              "authority_grid_3" = "society would crumble everyone did what they want",
+              "authority_grid_4" = "Employees should do what their bosses tell them to do",
+              "auotonomy_grid_1" =  "Bothers me when se someone trying to control another", 
+               "auonomgy_grid_2" =  "In ideal society, no adult would have power of any other",
+              "autonomy_grid_3" = "People should be free to do as chose as long as don't infringe upon others",
+               "autonomoy_grid_4" = "If someone tells me to do something, I will do the opposite",
+                "autonomy_grid_5" = "Admire people who challenge illegitimate authority",
+                "autonomy_grid_6" = "Most important characteristic of good society is freedom", 
+                "care_1"= "Compassion for those who are suffering us the most critical values",
+                "chaos" = "Our political and social institutions are worth preserving not destroying",
+                "conspiracy_grid" = "The COVID pandemic was exaggerated", 
+                "engagement"= "How often do you post about politics on social media", 
+                "fairness" = "Fairness should be the number one principle when the government makes laws", 
+                "freespeech_2" = "Attitudes to free speech",
+                "immigration_2" = "Has immigration undermined or enriched British culture", 
+                 "immigration_3" = "How strong is British identity", 
+                  "lr_grid_1" =   "Government should redistribute from income from the better off to those                    who are less well off",  
+                  "lr_grid_2" = "Big business takes advantage or ordinary people",
+                   "lr_grid_3" = "Ordinary people don't get a faire share of nation's wealth", 
+                   "lr_grid_4" = "One law for the rich and one for the poor", 
+                   "lr_grid_5" = "Management will try to get the better of employees if it get the chance",
+                   "nativism_1" = "Multiculturalism and national identity",
+                  "nativism_2" =  "Should the government prioritise British citizens", 
+                   "nativism_5" =  "Do ordinary people have to defend British culture", 
+                    "parenting_1" = "Is it more important for children to be independent or respect for elders",
+                    "parenting_2" = "Is it more important for children to be self-reliant or obedient", 
+                    "parenting_3" = "Is it more important for children to be well behaved",
+                    "parenting_4" =  "Is it more important for children to be curious or good manners"
+)
+   
+
+
+
+lapply(nms, \(x){
+  g <- question_table %>% 
+    filter(question == x) %>% 
+    unnest(df) %>% 
+    ggplot(aes(x = date, y = pct, color = response, group = response)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = titles[x],
+    x = "Date",
+    y = "Proportion",
+    color = "Response"
+  ) +
+  scale_x_date(date_breaks="1 month") + 
+  theme_minimal() + 
+  theme(plot.background = element_rect(fill="white")) 
+  ggsave(g, filename = file.path("C:/Users/Zain/golden_stability_grpahs", paste0(x, "_trend.png")), 
+    width = 10, 
+    height = 6
+  )
+})
+ # ggsave(g, filename = paste0(x, "_trend.png"), width = 10, height = 6)
+# })
+
+#lapply(nms, \(x){
+ # tmp <- question_table %>% 
+  #  filter(question == x) %>% 
+   # unnest(df) 
+#  write.csv(tmp, file = paste0(x, "_trend.csv"), row.names = FALSE)
+#})
+
+lapply(nms, function(x) {
+  tmp <- question_table %>%
+    filter(question == x) %>%
+    unnest(df)
+  write.csv(
+    tmp, 
+    file = paste0("C:/Users/Zain/golden_stability_tables/", x, "_trend.csv"), 
+    row.names = FALSE
+  )
+})
+
+
+
+
+data_long <- question_table %>% unnest(df)
+
+save(data_long, file = here("output", "data_long.RData"))
+
+data_long <-  read.RDS(here("output", "data_long"))
+
+## Calculate total for each data set - for each person in each dataset calaculate how many people answered  a particular response option (n) as proportion of total people in dataset (N)
+
+## Establish baseline expectation: calculate prob: the overall proportion of people across ALL datasets who selected each response option
+
+ ## Test each dataset against the baseline
+
+## For each dataset-question-response combination, if people in this dataset were responding like the overall population (prob), what's the probability would see a count this extreme (n out of N)?"
+
+## Uses the binomial distribution to calculate this probability (pval)
+
+##  Small p-values suggest the particaalr dataset's response pattern is significantly different from the norm
+
+
+saveRDS(data_long, here("output", "data_long.rds"))
+
+
+
+data_long <- readRDS(here("output", "data_long.rds"))
+
+tmp2 <- data_long %>% 
+  group_by(dataset, question) %>%
+  ## turn n into an integer count
+  mutate(
+    n = floor(n),
+    # sum n across all responses to each dataset-question pair giving the total number of people who answered the question in each dataset.
+    N = sum(n)
+  ) %>%
+  group_by(question, response) %>%
+  ## prob is the overall proportion of people across all surveys who give a particular response to a particular survey question.
+  mutate(
+    prob = sum(n) / sum(N),
+    ## pbinom is the CDF of the binomial distribution, so it is calculating the probability of observing n or more success out of N trials if the true probability is prob
+    ## where prob is calculated across all datasets.
+    pval = pbinom(n, N, prob, lower.tail = FALSE),
+    ## subtracts from 1 if pval is greater than .5 to get the appropriate tail probability.
+    pval = ifelse(pval > .5, 1 - pval, pval),
+    ## multiplies by 2 for a two-sided test.
+    pval = 2 * pval,
+    ## .05 is the p-value cutoff
+    small_p = pval < .05,
+    ## here .05 is the cutoff for practical significance, indicating a different of more than 5 percentage points as significant This flags cases where the observed proportion (pct) differs from the overall (reference) proportion (prob) by more than 0.05 (i.e., 5 percentage points).
+##Example: If prob is 0.30 (30%), then any pct below 0.25 (25%) or above 0.35 (35%) is considered “outside 5 ##points Interpretation: Absolute difference, fixed at five standard percentage points regardless of the size of prob.
+    outside_pm5_point = abs(pct - prob) > .05,
+    ##This flags cases where the observed proportion (pct) differs from the overall proportion (prob) by more than 5 percent of the overall proportion (a relative threshold).
+##Example: If prob is 0.30 (30%), then 5% of 0.3 is 0.015 (1.5 percentage points), so any pct below 0.285 or ## above 0.315 (28.5% to 31.5%) is flagged as outside 5 percent of the baseline proportion.
+##Interpretation: Relative difference; the threshold scales with the size of prob (“5% of whatever prob is”).
+    outside_pm5_pct = abs(pct - prob) > .05 * prob,
+    ## 2 standrd deveition from mean across data sets. Issue with the SD approach is that if the  responses are very variable, the standard deviation (sigma) is large, so only very extreme values will have z-scores above 2 or below -2 and get flagged as outliers
+    ## mean proportion across datasets, standard 
+    mu = mean(pct, na.rm = TRUE),
+    ## standard deviation across datasets
+    sigma = sd(pct, na.rm = TRUE),
+    ## z-score for each entry - how many sd a data is above or below mean
+    z_score = (pct - mu) / sigma,
+    ## flag if over 2 standard deviations from mean
+    outside_2sd = abs(z_score) > 2
+  )
+
+
+
+
+
+## outside 5 percent of the overall proportion
+table(tmp2$outside_pm5_pct)
+## outside 5 percentage points of the overall proportion
+table(tmp2$outside_pm5_point)
+## smaller than 0.05 p-value
+table(tmp2$small_p)
+## 2 standard deviation 
+table(tmp2$outside_2sd)
+
+
+mean(data_long$pct < 0.1, na.rm = TRUE)
+
+ result <- tmp2 %>% 
+  filter(outside_pm5_point == TRUE) %>% 
+  count(question, response) %>% 
+  arrange(desc(n))
+
+print(result, n = Inf)
+
+
+data_long %>%
+  filter(question == "lr_grid_3") %>%
+  distinct(dataset, question) %>% 
+  tally()  
+
+
+write.csv(data_long,here("output", "data_long.csv"))
+
+read_csv(here("output", "data_long.csv"))
+
+
+```
+
+```{r}
+
+## VErsion 2
+
+# 4-option questions
+four_option_qs <- c("agency_1", "agency_3", "parenting_4", "selfefficacy", "chaos", "freespeech_2", "nativism_1", "nativism_2", "nativism_5"  )  
+
+
+four_option_results <- data_long %>%
+ 
+  filter(question %in% four_option_qs) %>%
+
+  mutate(
+    combined = case_when(
+      str_detect(response, "^1") | str_detect(response, "^2") ~ "1-2",
+      str_detect(response, "^3") | str_detect(response, "^4") ~ "3-4",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  
+  drop_na(combined) %>%
+  
+  group_by(dataset, question, combined) %>%
+  summarise(total_n = sum(n), .groups = "drop") %>%
+
+  group_by(dataset, question) %>%
+  mutate(
+    proportion = total_n / sum(total_n),
+    percentage = proportion * 100
+  ) %>%
+  ungroup()
+
+
+print(four_option_results)
+
+# Get just the "1-2" percentages (those who responded 1 or 2)
+percentage_1_or_2 <- four_option_results %>%
+  filter(combined == "1-2") %>%
+  select(dataset, question, percentage)
+
+print(percentage_1_or_2)
+
+
+# ==============================================================================
+# PART 2: DESCRIBE QUESTIONS (with "not" vs without "not")
+# ==============================================================================
+
+
+describe_qs <- c("authority_grid_1", "care", "autonomy_grid_3", "autonomy_grid_5", "autonomy_grid_6" )  # Ad more as needed
+
+
+describe_results <- data_long %>%
+
+  filter(question %in% describe_qs) %>%
+  # Categorize: if "not" in response → "Does Not Describe", else → "Describes"
+  mutate(
+    combined = case_when(
+      str_detect(response, regex("not", ignore_case = TRUE)) ~ "Does Not Describe",
+      !is.na(response) ~ "Describes",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+
+  drop_na(combined) %>%
+
+  group_by(dataset, question, combined) %>%
+  summarise(total_n = sum(n), .groups = "drop") %>%
+  group_by(dataset, question) %>%
+  mutate(
+    proportion = total_n / sum(total_n),
+    percentage = proportion * 100
+  ) %>%
+  ungroup()
+
+
+print(describe_results)
+
+
+percentage_describes <- describe_results %>%
+  filter(combined == "Describes") %>%
+  select(dataset, question, percentage)
+
+print(percentage_describes)
+
+
+## TRUE FALSE QUESTIONS
+
+true_false_qs <- c("conspiracy_grid")  
+
+true_false_results <- data_long %>%
+  filter(question %in% true_false_qs) %>%
+  mutate(
+    combined = case_when(
+      str_detect(response, regex("true", ignore_case = TRUE)) ~ "TRUE",
+      str_detect(response, regex("false", ignore_case = TRUE)) ~ "FALSE",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  drop_na(combined) %>%
+  group_by(dataset, question, combined) %>%
+  summarise(n_total = sum(n), .groups = "drop") %>%
+  group_by(dataset, question) %>%
+  mutate(
+    proportion = n_total / sum(n_total),
+    percentage = round(proportion * 100, 2)
+  ) %>%
+  ungroup()
+
+# Get just the "FALSE" percentages (those who believe it's false)
+pct_false <- true_false_results %>%
+  filter(combined == "FALSE") %>%
+  select(dataset, question, percentage)
+
+# Or get just the "TRUE" percentages (those who believe it's true)
+pct_true <- true_false_results %>%
+  filter(combined == "TRUE") %>%
+  select(dataset, question, percentage)
+
+
+# IMMIGRATION QUESTION (5 options → 3 categories)
+# Combines: "increase" responses → "Increase"
+#           "same" response → "Keep Same"
+#           "reduce" responses → "Reduce"
+
+immigration_qs <- c("immigration")  
+
+immigration_results <- data_long %>%
+  filter(question %in% immigration_qs) %>%
+  mutate(
+    combined = case_when(
+      str_detect(response, regex("increase", ignore_case = TRUE)) ~ "Increase",
+      str_detect(response, regex("same", ignore_case = TRUE)) ~ "Keep Same",
+      str_detect(response, regex("reduce", ignore_case = TRUE)) ~ "Reduce",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  drop_na(combined) %>%
+  group_by(dataset, question, combined) %>%
+  summarise(n_total = sum(n), .groups = "drop") %>%
+  group_by(dataset, question) %>%
+  mutate(
+    proportion = n_total / sum(n_total),
+    percentage = round(proportion * 100, 2)
+  ) %>%
+  ungroup()
+
+
+pct_increase <- immigration_results %>%
+  filter(combined == "Increase") %>%
+  select(dataset, question, percentage)
+
+pct_same <- immigration_results %>%
+  filter(combined == "Keep Same") %>%
+  select(dataset, question, percentage)
+
+
+pct_reduce <- immigration_results %>%
+  filter(combined == "Reduce") %>%
+  select(dataset, question, percentage)
+
+
+
+
+# ==============================================================================
+
+## write_csv(percentage_1_or_2, "percentage_1_or_2.csv")
+## write_csv(percentage_describes, "percentage_describes.csv")
+
+# Or combine them
+# all_results <- bind_rows(
+ # percentage_1_or_2 %>% mutate(type = "4-option"),
+#  percentage_describes %>% mutate(type = "describe")
+# )
+
+# write_csv(all_results, "all_percentages.csv")
+
+
+
+
+# See agency_1 results across all datasets
+four_option_results %>%
+  filter(question == "agency_1") %>%
+  print()
+
+# See just the "1-2" percentage for agency_1
+four_option_results %>%
+  filter(question == "agency_1", combined == "1-2") %>%
+  select(dataset, percentage) %>%
+  print()
+
+# LR_GRID QUESTIONS (5-point scale → 3 categories)
+# Combines: "agree" responses → "Agree"
+#           "neither" response → "Neither"
+#           "disagree" responses → "Disagree"
+
+lr_grid_qs <- c("lr_grid_1", "lr_grid_2", "lr_grid_3", "lr_grid_4", "lr_grid_5") 
+
+lr_grid_results <- data_long %>%
+  filter(question %in% lr_grid_qs) %>%
+  mutate(
+    combined = case_when(
+      str_detect(response, regex("agree", ignore_case = TRUE)) & 
+        !str_detect(response, regex("disagree|neither", ignore_case = TRUE)) ~ "Agree",
+      str_detect(response, regex("disagree", ignore_case = TRUE)) ~ "Disagree",
+      str_detect(response, regex("neither", ignore_case = TRUE)) ~ "Neither",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  drop_na(combined) %>%
+  group_by(dataset, question, combined) %>%
+  summarise(n_total = sum(n), .groups = "drop") %>%
+  group_by(dataset, question) %>%
+  mutate(
+    proportion = n_total / sum(n_total),
+    percentage = round(proportion * 100, 2)
+  ) %>%
+  ungroup()
+
+
+pct_agree <- lr_grid_results %>%
+  filter(combined == "Agree") %>%
+  select(dataset, question, percentage)
+
+
+pct_disagree <- lr_grid_results %>%
+  filter(combined == "Disagree") %>%
+  select(dataset, question, percentage)
+
+
+pct_neither <- lr_grid_results %>%
+  filter(combined == "Neither") %>%
+  select(dataset, question, percentage)
+
+
+# CARE, PURITY, FAIRNESS, AUTHORITY (6-point scale → 2 categories)
+# Combines: all "agree" responses → "Agree"
+#           all "disagree" responses → "Disagree"
+
+six_point_qs <- c("care", "purity", "fairness", "authority")
+
+six_point_results <- data_long %>%
+  filter(question %in% six_point_qs) %>%
+  mutate(
+    combined = case_when(
+      str_detect(response, regex("agree", ignore_case = TRUE)) & 
+        !str_detect(response, regex("disagree", ignore_case = TRUE)) ~ "Agree",
+      str_detect(response, regex("disagree", ignore_case = TRUE)) ~ "Disagree",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  drop_na(combined) %>%
+  group_by(dataset, question, combined) %>%
+  summarise(n_total = sum(n), .groups = "drop") %>%
+  group_by(dataset, question) %>%
+  mutate(
+    proportion = n_total / sum(n_total),
+    percentage = round(proportion * 100, 2)
+  ) %>%
+  ungroup()
+
+# Get just the "Agree" percentages
+pct_agree_six <- six_point_results %>%
+  filter(combined == "Agree") %>%
+  select(dataset, question, percentage)
+
+# Get just the "Disagree" percentages
+pct_disagree_six <- six_point_results %>%
+  filter(combined == "Disagree") %>%
+  select(dataset, question, percentage)
+
+# ENGAGEMENT QUESTION (3 options → 2 categories)
+# Combines: "Never" → "Never Posts"
+#           "from time to time" + "daily basis" → "Posts"
+
+engagement_qs <- c("engagement")
+
+engagement_results <- data_long %>%
+  filter(question %in% engagement_qs) %>%
+  mutate(
+    combined = case_when(
+      str_detect(response, regex("never", ignore_case = TRUE)) ~ "Never Posts",
+      str_detect(response, regex("time to time|daily", ignore_case = TRUE)) ~ "Posts",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  drop_na(combined) %>%
+  group_by(dataset, question, combined) %>%
+  summarise(n_total = sum(n), .groups = "drop") %>%
+  group_by(dataset, question) %>%
+  mutate(
+    proportion = n_total / sum(n_total),
+    percentage = round(proportion * 100, 2)
+  ) %>%
+  ungroup()
+
+# Get just the "Posts" percentages (those who post at all)
+pct_posts <- engagement_results %>%
+  filter(combined == "Posts") %>%
+  select(dataset, question, percentage)
+
+# Get just the "Never Posts" percentages
+pct_never_posts <- engagement_results %>%
+  filter(combined == "Never Posts") %>%
+  select(dataset, question, percentage)
+
+```
+
+```{r}
+#Combine all results for graphs
+
+## for lrgrid_3 check rid didn;t get swtiched
+## agregate dots so different point for each month - so one dot per month 
+
+lr_grid_results %>%
+  filter(question == "lr_grid_3") %>%
+  print(n = 100)
+
+# Combine all results with ALL response categories
+all_questions_for_plot <- bind_rows(
+  four_option_results %>% 
+    select(dataset, question, combined, percentage) %>%
+    rename(response_category = combined),
+  
+  describe_results %>% 
+    select(dataset, question, combined, percentage) %>%
+    rename(response_category = combined),
+  
+  true_false_results %>% 
+    select(dataset, question, combined, percentage) %>%
+    rename(response_category = combined),
+  
+  immigration_results %>% 
+    select(dataset, question, combined, percentage) %>%
+    rename(response_category = combined),
+  
+  lr_grid_results %>% 
+    select(dataset, question, combined, percentage) %>%
+    rename(response_category = combined),
+  
+  six_point_results %>% 
+    select(dataset, question, combined, percentage) %>%
+    rename(response_category = combined),
+  
+  engagement_results %>% 
+    select(dataset, question, combined, percentage) %>%
+    rename(response_category = combined)
+)
+
+# Add date information
+all_questions_for_plot <- all_questions_for_plot %>%
+  left_join(
+    data_long %>% select(dataset, date) %>% distinct(),
+    by = "dataset"
+  ) %>%
+  mutate(date = as.Date(date, format = "%d/%m/%Y"))
+
+
+
+output_folder <- "C:/Users/Zain/Golden_Question_Stability_2"
+
+
+questions_list <- as.character(unique(all_questions_for_plot$question))
+
+# Loop through each question and save individual plot
+for (q in questions_list) {
+ 
+  p <- all_questions_for_plot %>%
+    filter(question %in% q) %>%
+    ggplot(aes(x = date, y = percentage, color = response_category, group = response_category)) +
+    geom_line(size = 1.5) +
+    geom_point(size = 3) +
+    theme_classic() +
+    labs(
+      title = paste("Question:", q),
+      x = "Date",
+      y = "Percentage (%)",
+      color = "Response Category"
+    ) +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(size = 16, face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid.major.y = element_line(color = "gray90", size = 0.5),  # Horizontal gridlines
+      panel.grid.major.x = element_blank(),  # Remove vertical gridlines
+      panel.grid.minor = element_blank(),    # Remove minor gridlines
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    ) +
+    scale_y_continuous(
+      limits = c(0, 100),
+      breaks = seq(0, 100, by = 10) 
+    )
+  
+
+  filename <- paste0(output_folder, "/", q, ".png")
+  ggsave(filename, p, width = 10, height = 6, dpi = 300, bg = "white")
+  
+  # Print progress
+  cat("Saved:", filename, "\n")
+}
+
+cat("\nAll plots saved to:", output_folder, "\n")
+cat("Total plots created:", length(questions_list), "\n")
+
+
+
+titles <- c("agency_1" = "Are life outcomes under your control",
+           "agency_2" = "Hard work and effort will allow all people to have success", 
+            "agency_3" = "Which is more important for success - hard work or luck",
+             "authority_grid_1" = "Most traditions serve a valuable function", 
+              "authority_grid_2" = "Important to teach children to value authority", 
+              "authority_grid_3" = "society would crumble everyone did what they want",
+              "authority_grid_4" = "Employees should do what their bosses tell them to do",
+              "auotonomy_grid_1" =  "Bothers me when se someone trying to control another", 
+               "auonomgy_grid_2" =  "In ideal society, no adult would have power of any other",
+              "autonomy_grid_3" = "People should be free to do as chose as long as don't infringe upon others",
+               "autonomoy_grid_4" = "If someone tells me to do something, I will do the opposite",
+                "autonomy_grid_5" = "Admire people who challenge illegitimate authority",
+                "autonomy_grid_6" = "Most important characteristic of good society is freedom", 
+                "care_1"= "Compassion for those who are suffering us the most critical values",
+                "chaos" = "Our political and social institutions are worth preserving not destroying",
+                "conspiracy_grid" = "The COVID pandemic was exaggerated", 
+                "engagement"= "How often do you post about politics on social media", 
+                "fairness" = "Fairness should be the number one principle when the government makes laws", 
+                "freespeech_2" = "Attitudes to free speech",
+                "immigration_2" = "Has immigration undermined or enriched British culture", 
+                 "immigration_3" = "How strong is British identity", 
+                  "lr_grid_1" =   "Government should redistribute from income from the better off to those who are less well off",  
+                  "lr_grid_2" = "Big business takes advantage or ordinary people",
+                   "lr_grid_3" = "Ordinary people don't get a faire share of nation's wealth", 
+                   "lr_grid_4" = "One law for the rich and one for the poor", 
+                   "lr_grid_5" = "Management will try to get the better of employees if it get the chance",
+                   "nativism_1" = "Multiculturalism and national identity",
+                  "nativism_2" =  "Should the government prioritise British citizens", 
+                   "nativism_5" =  "Do ordinary people have to defend British culture", 
+                    "parenting_1" = "Is it more important for children to be independent or respect for elders",
+                    "parenting_2" = "Is it more important for children to be self-reliant or obedient", 
+                    "parenting_3" = "Is it more important for children to be well behaved",
+                    "parenting_4" =  "Is it more important for children to be curious or good manners"
+)
+   
+
+
+
+lapply(nms, \(x){
+  g <- all_questions_for_plot %>% 
+    filter(question == x) %>% 
+    unnest(df) %>% 
+    ggplot(aes(x = date, y = percentage, color = response_category, group = response_category)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = titles[x],
+    x = "Date",
+    y = "Percentage",
+    color = "Response"
+  ) +
+  scale_x_date(date_breaks="1 month") + 
+  theme_minimal() + 
+  theme(plot.background = element_rect(fill="white")) 
+  ggsave(g, filename = file.path("C:/Users/Zain/Golden_Question_Stability_2", paste0(x, "_trend.png")), 
+    width = 10, 
+    height = 6
+  )
+})
+
+
+```
+
+
+```{r}
+short_resp <- c(
+  "1" = "Inst. worth preserving",
+  "2" = "Middle",
+  "3" = "Middle",
+  "4" = "Burn it all",
+  "NA" = "NA"
+)
+
+g <- all_questions_for_plot %>% 
+  filter(question == x) %>% 
+  unnest(df) %>% 
+  ggplot(aes(x = date, y = percentage,
+             color = response_category, group = response_category)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = titles[x],
+    x = "Date",
+    y = "Proportion",
+    color = "Response"
+  ) +
+  scale_x_date(date_breaks = "1 month") +
+  scale_color_discrete(labels = short_resp) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill="white"),
+    legend.key.width = unit(0.6, "lines"),   # tighter legend
+    legend.text = element_text(size = 8)     # smaller text
+  )
+ggsave(g, filename = file.path("C:/Users/Zain/Golden_Question_Stability_2", paste0(x, "_trend.png")), 
+    width = 10, 
+    height = 6
+  )
+
+```
+
+
+
+
+```{r}
+
+## Ordinary working people don't get fair share of nation's wealth  
+
+
+lr_grid_3 <- pct_agree %>%
+  filter(question == "lr_grid_3") 
+
+```
+
+```{r}
+
+## get each of the variables in to indivuals data sets 
+
+
+question_dfs <- split(all_questions_for_plot, all_questions_for_plot$question)
+output_dir <- "C:/Users/Zain/golden_question_stability_table_3"
+
+for(q_name in names(question_dfs)) {
+  filename <- gsub("[^A-Za-z0-9_]", "_", q_name)
+  
+  filepath <- file.path(output_dir, paste0(filename, ".csv"))
+  
+  # Write the CSV file
+  write.csv(question_dfs[[q_name]], 
+            filepath, 
+            row.names = FALSE)
+}
+
+
+```
+
+```{r}
+
+## chi square test for each pf the quesiton 
+
+four_option_results <- four_option_results %>%
+  rename(n_total = total_n)
+
+describe_results <- describe_results %>%
+  rename(n_total = total_n)
+
+all_question_test_chi <- bind_rows(
+  four_option_results %>% 
+    select(dataset, question, combined, percentage, n_total) %>%
+    rename(response_category = combined),
+  
+  describe_results %>% 
+    select(dataset, question, combined, percentage, n_total) %>%
+    rename(response_category = combined),
+  
+  true_false_results %>% 
+    select(dataset, question, combined, percentage, n_total) %>%
+    rename(response_category = combined),
+
+  immigration_results %>% 
+    select(dataset, question, combined, percentage, n_total) %>%
+    rename(response_category = combined),
+  
+  lr_grid_results %>% 
+    select(dataset, question, combined, percentage, n_total) %>%
+    rename(response_category = combined),
+  
+  six_point_results %>% 
+    select(dataset, question, combined, percentage, n_total) %>%
+    rename(response_category = combined),
+  
+  engagement_results %>% 
+    select(dataset, question, combined, percentage, n_total) %>%
+    rename(response_category = combined)
+)
+
+# Add date information as before
+all_question_test_chi <- all_question_test_chi %>%
+  left_join(
+    data_long %>% select(dataset, date) %>% distinct(),
+    by = "dataset"
+  ) %>%
+  mutate(date = as.Date(date, format = "%d/%m/%Y"))
+
+
+
+
+
+question_chi <- split(all_question_test_chi, all_question_test_chi$question)
+
+
+# Function to run Chi-squared test on a single question's dataframe
+run_chisq_test <- function(df) {
+  tab <- df %>%
+    select(dataset, response_category, n_total) %>%
+    pivot_wider(
+      names_from = response_category,
+      values_from = n_total,
+      values_fill = 0
+    ) %>%
+    select(-dataset) %>%
+    as.matrix()
+  
+  # Only run test if table has >1 row and >1 column
+  if (any(dim(tab) < 2)) return(tibble(statistic=NA, p.value=NA, df=NA))
+  
+  test <- chisq.test(tab)
+  tibble(statistic = test$statistic,
+         p.value = test$p.value,
+         df = test$parameter)
+}
+
+# Apply to all question dataframes in the list
+chi_sq_results <- map_dfr(question_chi, run_chisq_test, .id = "question")
+
+
+## victimhood immigration 
+ ## properties in crunch on lr_grid_3
+
+```
+
+```{r}
+
+run_chisq_test <- function(df) {
+  tab <- df %>%
+    select(dataset, response_category, n_total) %>%
+    pivot_wider(
+      names_from = response_category,
+      values_from = n_total,
+      values_fill = 0
+    ) %>%
+    select(-dataset) %>%
+    as.matrix()
+  
+  # Only run test if table has >1 row and >1 column
+  if (any(dim(tab) < 2)) return(tibble(statistic=NA, p.value=NA, df=NA))
+  
+  test <- chisq.test(tab)
+  tibble(statistic = test$statistic,
+         p.value = test$p.value,
+         df = test$parameter)
+}
+
+# Apply to all question dataframes in the list
+chi_sq_results <- map_dfr(question_chi, run_chisq_test, .id = "question")
+
+
+
+run_chisq_test <- function(df) {
+  tab <- df %>%
+    select(dataset, response_category, n_total) %>%
+    pivot_wider(
+      names_from = response_category,
+      values_from = n_total,
+      values_fill = 0
+    ) %>%
+    select(-dataset) %>%
+    as.matrix()
+  
+  # Only run test if table has >1 row and >1 column
+  if (any(dim(tab) < 2)) return(tibble(statistic=NA, p.value=NA, df=NA, cramers_v=NA))
+  
+  test <- chisq.test(tab)
+  
+  # Calculate Cramér's V
+  n_total <- sum(tab)
+  min_dim <- min(nrow(tab) - 1, ncol(tab) - 1)
+  cramers_v <- sqrt(test$statistic / (n_total * min_dim))
+  
+  tibble(statistic = test$statistic,
+         p.value = test$p.value,
+         df = test$parameter,
+         cramers_v = as.numeric(cramers_v))
+}
+
+# Apply to all question dataframes
+chi_sq_results <- map_dfr(question_chi, run_chisq_test, .id = "question")
+
+
+write.csv(chi_sq_results, here("output", "chi_sq_results.csv"), row.names = FALSE)
+
+
+```
+
+ 
+```{r}
+ # variance std deviation for each quesiton 
+ ## var.test if two things have the same varaince
+  
+  vtest <- function(x, h0 = 1){
+  null_samp <- rnorm(length(x), 0, h0)
+  null_samp <- null_samp * h0/sd(null_samp)
+  var.test(x, null_samp, ratio = 1, alternative = "greater")
+  }
+
+all_question_test_chi %>% 
+  group_by(question) %>% 
+  summarise(p_value = vtest(percentage, 10)$p.value)
+
+all_question_test_chi %>% 
+  group_by(question) %>% 
+  summarise(v = var(percentage),
+            s = sd(percentage))
+
+all_question_test_chi %>% 
+  group_by(question) %>% 
+  summarise(v = var(percentage),
+            s = sd(percentage)) %>% 
+  arrange(desc(s)) %>%
+  print(n=25)
+
+all_question_test_chi %>% 
+  filter(question == "fairness")
+
+## is the standard deviation that we are testing signficiantly bigger than 2.5 - p value > 0.05 means we fail to reject the null that the sd is 2.5 or less - average distance from the mean is 2.5 % percent 
+
+ var_test <- all_question_test_chi %>% 
+  group_by(question, response_category) %>% 
+  filter(n() >= 3) %>% 
+  summarise(s = sd(percentage, na.rm=TRUE), 
+            p_value = vtest(percentage, 2.5)$p.value, 
+            stability = ifelse(p_value >= .05, "Stable", "Unstable")) %>% 
+  print(n=100)
+ 
+ 
+ write.csv(var_test, here("output", "var_test_results.csv"), row.names = FALSE)
+
+all_question_test_chi %>% 
+  group_by(question, response_category) %>% 
+  summarise(v = var(percentage),
+            s = sd(percentage)) %>% 
+  arrange(desc(s)) %>%
+  print(n=100)
+
+
+```
+```{r}
+## pairwise comparison function 
+
+make_pw_diff <- function(x, names, ...){
+  n <- length(x)
+  combs <- combn(n, 2)
+  x1 <- x[combs[1,]]
+  x2 <- x[combs[2,]]
+  name1 <- names[combs[1,]]
+  name2 <- names[combs[2,]]
+  diff <- x2-x1
+  data.frame(name1, name2, x1, x2, diff)
+}
+
+pairs <- all_question_test_chi %>%
+  group_by(question, response_category) %>% 
+  filter(n() >= 2) %>% 
+  reframe(pw_diff = list(make_pw_diff(percentage, dataset))) %>%
+  unnest(pw_diff)
+
+pair_test <- pairs %>% group_by(question, response_category) %>% summarise(gt5 = sum(abs(diff) > 5),
+                                                        gt10 = sum(abs(diff) > 10),
+                                                        gt20 = sum(abs(diff) > 20),
+                                                        n = n())
+
+
+
+
+ write.csv(pair_test, here("output", "pair_test_results.csv"), row.names = FALSE)
+
+
+print(pairs, n = Inf)
+
+
+
+
+write.csv(all_question_test_chi, here("output", "all_quest_test.csv"), row.names = FALSE)
